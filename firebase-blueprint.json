@@ -1,0 +1,40 @@
+{
+  "entities": {
+    "Render": {
+      "title": "Render",
+      "description": "A generated JS5 script with its associated prompt and repository context.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "The UID of the user who generated the script." },
+        "prompt": { "type": "string", "description": "The user's original text prompt." },
+        "repos": { 
+          "type": "array", 
+          "items": { "type": "string" },
+          "description": "The list of repository names mixed for this generation." 
+        },
+        "js5Code": { "type": "string", "description": "The generated JavaScript code for the JS5 art." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "When the render was created." }
+      },
+      "required": ["userId", "prompt", "repos", "js5Code", "createdAt"]
+    },
+    "User": {
+      "title": "User",
+      "description": "User profile information and roles.",
+      "type": "object",
+      "properties": {
+        "role": { "type": "string", "enum": ["admin", "user"], "description": "The user's role in the system." }
+      },
+      "required": ["role"]
+    }
+  },
+  "firestore": {
+    "renders": {
+      "schema": "Render",
+      "description": "A collection of all generated JS5 scripts and their metadata."
+    },
+    "users": {
+      "schema": "User",
+      "description": "A collection of user profiles and roles."
+    }
+  }
+}
