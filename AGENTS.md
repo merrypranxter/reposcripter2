@@ -36,7 +36,7 @@ This file contains distilled guidance on natural and mathematical coding concept
 - **The Overwrite Problem**: You cannot overwrite the grid while processing it, as new cell states depend on the *previous* states of neighbors.
 - **Two-Array Solution**: Maintain `current` and `next` arrays. Read from `current`, write to `next`, then swap (`current = next`) after the full grid pass.
 - **Laplacian (Neighborhood Blur)**: Calculate diffusion by weight-summing a 3x3 neighborhood (center = -1, adjacent = 0.2, diagonal = 0.05).
-- **Reaction Equation**: Apply `A * B * B` reaction logic with uniform feed and kill rates.
+- **Reaction Equation (Gray-Scott)**: Apply `A * B * B` reaction logic. Chemical A is added at a "feed rate", Chemical B is removed at a "kill rate".
 - **Direct Pixel Manipulation**: Use the `pixels` array instead of `rect()` for performance.
 - **Optimization**: Run multiple mathematical iterations per visual frame to speed up growth.
 
@@ -48,6 +48,7 @@ This file contains distilled guidance on natural and mathematical coding concept
 - **Hardware Acceleration**: This technique is ideal for WebGL shaders or FFT-based math libraries to maintain high frame rates with large neighborhoods.
 
 ### Lesson: Advanced CA (History, Probability, & Topology)
+- **Dual-Buffering (Simultaneity Paradox)**: Always maintain `current` and `next` arrays. Calculate `next` by reading from `current`, then swap: `current = next`.
 - **State History & Transitions**: Track `current` and `previous` states to color transitional events (e.g., birth vs. death). Map cell "age" (consecutive frames) to color gradients for rich visuals.
 - **Probabilistic & Continuous Rules**: Introduce randomness to survival conditions (e.g., 80% death chance) to make patterns feel organic. Use floating-point states (0.0-1.0) for soft fading and ghosting trails.
 - **Non-Rectangular & Dynamic Grids**: Use hexagonal grids or untether cells entirely, treating them as moving particles (boids) with neighborhoods that change based on physical proximity.
@@ -83,9 +84,179 @@ This file contains distilled guidance on natural and mathematical coding concept
 - **Formal Grammar**: Use an **Axiom** (starting string) and **Production Rules** (e.g., `A -> AB`) to recursively generate complex strings.
 - **String Rewriting**: Iterate through the current string, applying rules to each character. Use an array and `.join('')` for performance when building massive strings (exponential growth).
     - **Optimization**: Avoid `+=` concatenation on strings (immutable objects). Instead, push replacement characters into an array buffer and `.join('')` at the end of the generation. This replicates the `StringBuffer` pattern to prevent memory crashes during exponential expansion.
+    - **Implementation**:
+      ```javascript
+      let nextBuffer = [];
+      for (let i = 0; i < current.length; i++) {
+        let c = current.charAt(i);
+        if (rules[c]) nextBuffer.push(rules[c]);
+        else nextBuffer.push(c);
+      }
+      current = nextBuffer.join('');
+      ```
+- **Stochastic L-Systems**: Introduce probability to rules (e.g., `A -> AB` 70% of the time, `A -> AC` 30%). This ensures organic variation.
 - **Turtle Graphics**: Translate the final string into visual geometry using a virtual "turtle."
     - `F`: Draw forward + translate.
     - `G`: Move forward (no draw).
     - `+` / `-`: Rotate right/left.
     - `[` / `]`: **Push/Pop Matrix** (`ctx.save()` / `ctx.restore()`) to handle branching structures like trees.
 - **Recursive Complexity**: L-systems excel at modeling biological growth, fractals (Koch curve, Cantor set), and self-similar architectures.
+
+### Lesson: Koch Curve L-system
+- **Grammar**: Alphabet `{F, L, R}`.
+- **Axiom**: `F`.
+- **Rules**: `F -> FLFRFLF`.
+- **Turtle Commands**:
+    - `F`: Move forward + draw.
+    - `L`: Turn left by 60°.
+    - `R`: Turn right by 120°.
+- **Growth**: Generation 0 is a line; Generation 1 is a peak; subsequent generations create recursive fractal edges.
+
+### Lesson: Autonomous Agents & Flocking (Boids)
+- **Concept**: Emergent group dynamics from simple local rules. An autonomous agent perceives its environment and calculates actions without a central leader.
+- **Steering Formula**: `steering force = desired velocity - current velocity`. This acts as an error-correction mechanism.
+- **The Three Core Rules**:
+    - **Separation (Avoidance)**: Steer away from crowding neighbors. Calculate vectors pointing away from close neighbors, normalize, and divide by distance (flee more aggressively from closer threats).
+    - **Alignment (Copy)**: Steer in the same direction as local flockmates. Calculate the average velocity of neighbors within a radius.
+    - **Cohesion (Center)**: Steer toward the center of mass of local neighbors. Calculate the average location of neighbors and "seek" that target.
+- **Implementation**: Accumulate these forces with adjustable weights.
+- **Advanced Perception & Rules**:
+    - **Field of View**: Limit perception to a forward-facing geometric cone.
+    - **View (Gary Flake)**: Move laterally away from any boid that blocks the view.
+    - **Obstacle Avoidance**: If an obstacle is detected within a threshold, calculate a desired velocity pointing exactly away from it. Apply the steering formula.
+- **Optimization (Spatial Hash Grid / Bin-Lattice)**: Divide the canvas into a 2D grid. Agents only check neighbors in their own and adjacent cells. This reduces complexity from $O(N^2)$ to nearly $O(N)$.
+
+### Lesson: Steering Behaviors (Seek & Flee)
+- **Seek**: `desired velocity = target - position`. Normalize and scale to `maxspeed`.
+- **Flee**: `desired velocity = position - target`. Normalize and scale to `maxspeed`.
+- **Steering Calculation**: `force = desired - velocity`. Limit the magnitude by `maxforce` to simulate physical turning constraints.
+- **Arrival**: Slow down as the agent approaches the target by scaling `desired velocity` based on distance when within a "slowing radius".
+
+### Lesson: Force Fields & Repellers
+- **Repellers**: Objects that push agents away.
+- **Calculation**: Calculate a vector pointing from the repeller to the agent. Scale the force to be inversely proportional to the distance squared ($1/d^2$).
+- **Weighting**: Avoidance/Repulsion forces are typically weighted higher than flocking forces (e.g., `avoid * 3.0` vs `cohesion * 1.0`) to prioritize survival over formation.
+
+### Lesson: Cellular Automata (CA) Variations
+- **1D/2D CA**: Grids of cells evolving based on neighbor states.
+- **Game of Life**: Standard 2D survival/birth rules.
+- **Vichniac Vote**: Models conformity; cell changes state if it's in the minority.
+- **Brian's Brain**: Three states (Firing, Resting, Off); resembles neural synapse firing.
+
+### Lesson: Evolutionary Computing & Genetic Algorithms
+- **Genotype**: Digital DNA (data structure). An array of parameters (0.0 to 1.0) representing traits.
+- **Phenotype**: Visual expression/behavior of the DNA (e.g., a specific fractal tree).
+- **Fitness Function**: Numerical evaluation of performance.
+- **Interactive Selection (IEC)**: Use the **User as the Fitness Function**. Evolve art based on user preference.
+- **Selection**: Mating pool of successful genotypes.
+- **Variation**: Crossover (mixing DNA) and Mutation (randomly flipping bits).
+- **Vibecode Trick**: Map DNA to **Shader Uniforms** to evolve the logic of light and texture.
+
+### Lesson: Artificial Neural Networks (Perceptrons)
+- **Perceptron**: Simple model receiving multiple inputs, processing with weights, and producing an output.
+- **Activation Functions**: Use `tanh` or `Sigmoid` to squash outputs between 0 and 1.
+- **Learning**:
+    - **Supervised**: Correcting errors based on known answers.
+    - **Reinforcement**: Learning from environmental feedback (rewards/penalties).
+- **Application**: Teaching agents to steer, recognize patterns, or adapt. Use as a **Brush Controller** to map inputs (speed, position) to visual traits (weight, hue).
+
+### Lesson: Neuroevolution (NEAT)
+- **Brain-Body Connection**: Give agents "sensors" (probes) and a Neural Network brain.
+- **Evolving Topology**: Don't just evolve weights; evolve the architecture (adding/removing neurons).
+- **Emergent Creativity**: Agents learn complex behaviors (e.g., swimming against currents) through generations of selection.
+
+### Lesson: Advanced Physics & Libraries
+- **Libraries**: Use **Box2D** or **toxiclibs** for complex mechanics.
+- **Capabilities**: Polygon collisions, pendulums, elastic bridges, and joint constraints.
+- **Efficiency**: Offload exhaustive collision math to specialized engines.
+
+### Lesson: Verlet Integration (Physics of Squish)
+- **Verlet Logic**: Store **Previous Position** instead of velocity. `velocity = currentPos - previousPos`.
+- **Constraints (Relaxation Loop)**: Move points until they are the "correct" distance apart. Incredibly stable for ropes, cloth, and soft bodies.
+- **Soft-Body Morphing**: Connect points with Verlet "sticks". Inflate shapes by increasing internal stick lengths.
+
+### Lesson: Fluid Dynamics (Navier-Stokes)
+- **Eulerian Grid**: Divide screen into cells storing Velocity and Density.
+- **Advection**: Move density along velocity vectors.
+- **Diffusion**: Spread density/velocity to neighbors.
+- **Pressure/Divergence**: Balance "stuff" in cells to ensure incompressibility.
+- **GPU Acceleration**: Use shader passes for Advection, Jacobi Iteration (pressure), and Divergence.
+
+### Lesson: Reaction-Diffusion (Gray-Scott)
+- **Gray-Scott Model**: Simulates chemical reaction/diffusion.
+- **Parameters**:
+    - **Feed Rate**: Addition of Chemical A.
+    - **Kill Rate**: Removal of Chemical B.
+    - **Diffusion Rate**: Spread to neighbors.
+- **Visuals**: Brain coral, zebra stripes, cellular mitosis.
+
+### Lesson: GLSL Shaders & Visual Effects
+- **Vertex Shaders**: Transform geometry.
+- **Fragment Shaders**: Define per-pixel color.
+- **Effects**:
+    - **Fresnel Effect**: View-dependent material appearance.
+    - **Post-Processing**: High-performance visual filters.
+- **Advanced Rendering**: Ray marching and SDFs for infinite fractals and complex lighting.
+
+### Lesson: Ray Marching & Signed Distance Functions (SDFs)
+- **Architecture**: Every pixel emits a virtual ray into the 3D scene. The ray steps forward based on the shortest signed distance to the nearest surface (SDF).
+- **GPU Optimization**: Ray marching is ideal for GLSL fragment shaders, enabling real-time rendering of fractals and complex mathematical manifolds.
+- **SDF Logic**: Use SDFs to define geometry mathematically (e.g., `length(p) - radius` for a sphere) rather than using explicit polygons.
+
+### Lesson: Non-Euclidean Spaces & Hyperbolic Art
+- **Mirror Rooms & Polyhedral Manifolds**: Space wraps around. Use **Modular Arithmetic** on Ray Marching positions: `p = mod(p, roomSize) - 0.5 * roomSize;`.
+- **Hyperbolic Tiling (Poincaré Disk)**: Parallel postulate fails. Objects shrink infinitely as they approach the disk boundary.
+- **Artistic Application**: Map L-Systems onto a hyperbolic plane for Escher-like "Circle Limit" effects.
+
+### Lesson: Differential Growth (Math of Wrinkles)
+- **Nodes and Springs**: Represent a boundary as connected nodes with Attraction (spring) and Repulsion (collision avoidance).
+- **Injection**: If neighbors get too far apart, inject a new node.
+- **Curvature-Based Injection**: Inject nodes where curvature is highest to create fractal-like ruffles (brains, kale, coral).
+
+### Lesson: Strange Attractors (Portraits of Chaos)
+- **Lorenz & Clifford Attractors**: Iterative functions sensitive to initial conditions.
+- **Rendering**: Use **Additive Blending** and millions of semi-transparent points.
+- **Density Mapping**: Map local hit-counts to HDR color ramps in a shader.
+
+### Lesson: Domain Warping (Sculpting with Noise)
+- **Nested Transformations**: `f(p) = noise( p + noise( p + noise( p ) ) )`.
+- **GLSL Implementation**: Use **Fractional Brownian Motion (FBM)** octaves.
+- **Vibe Shift**: Warp Worley noise with FBM for textures like stretched tissue or obsidian.
+
+### Lesson: Particle-Life (Behavioral Chemistry)
+- **Interaction Matrix**: Define attraction/repulsion forces between different "colors" of particles.
+- **Emergent Taxonomy**: Evolve the matrix using Genetic Algorithms to discover complex multicellular-like organisms.
+
+### Lesson: Coordinate Systems (Euclidean vs Polar/Spherical)
+- **Euclidean (Cartesian)**: Standard $X/Y/Z$ grid. Best for linear, grid-based structures.
+- **Polar (2D)**: Defined by radius ($r$) and angle ($\theta$). Best for circular paths and radial symmetry.
+    - **Conversion**: $x = r \cdot \cos(\theta)$, $y = r \cdot \sin(\theta)$.
+- **Spherical (3D)**: Defined by radius ($r$), azimuthal angle ($\theta$), and polar angle ($\phi$).
+    - **Conversion**: $x = r \cdot \sin(\phi) \cdot \cos(\theta)$, $y = r \cdot \sin(\phi) \cdot \sin(\theta)$, $z = r \cdot \cos(\phi)$.
+
+### Lesson: The Book of Shaders - Algorithmic Drawing
+- **Shaping Functions**: Use `step(edge, x)` for binary thresholds and `smoothstep(edge0, edge1, x)` for smooth transitions. Use `pow()`, `exp()`, `log()`, and `sqrt()` to warp the linear flow of values.
+- **Color Spaces**:
+    - **HSB**: More intuitive for color picking. Map `x` to Hue and `y` to Brightness.
+    - **YUV**: Used for analog encoding; bandwidth-efficient chrominance.
+- **Polar Coordinates**: Convert Cartesian `(x, y)` to Polar `(r, theta)` using `length(st)` and `atan(y, x)`. This is essential for circular patterns and radial symmetry.
+- **Distance Fields (SDF)**: Define shapes by the distance from a point to the shape's boundary.
+    - **Circle**: `length(st - center) - radius`.
+    - **Rectangle**: `max(abs(st.x), abs(st.y)) - size`.
+    - **Combining**: Use `min()` for union, `max()` for intersection, and `clamp(a-b)` for subtraction.
+- **2D Matrices**:
+    - **Translate**: `st + offset`.
+    - **Rotate**: `mat2(cos(a), -sin(a), sin(a), cos(a)) * st`.
+    - **Scale**: `mat2(s.x, 0.0, 0.0, s.y) * st`.
+    - **Order Matters**: Always translate to origin before rotating or scaling, then translate back.
+- **Tiling & Patterns**:
+    - **Fract**: Use `fract(st * zoom)` to repeat space.
+    - **Truchet Tiles**: Use random rotation per cell to create infinite non-repeating paths.
+    - **Offset Patterns**: Use `mod(row, 2.0)` to offset every other row (brick pattern).
+- **Generative Design**:
+    - **2D Random**: `fract(sin(dot(st, vec2(12.9898, 78.233))) * 43758.5453)`.
+    - **2D Noise**: Interpolate between random values at the four corners of a grid cell.
+    - **Fractal Brownian Motion (FBM)**: Sum multiple octaves of noise with increasing frequency and decreasing amplitude.
+- **Image Processing**:
+    - **Textures**: Use `texture2D(u_tex, st)` to sample images. Coordinates are normalized (0.0 to 1.0).
+    - **Blending Modes**: Implement Photoshop-style blends (Multiply, Screen, Overlay, Color Dodge) using math macros.

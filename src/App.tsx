@@ -118,7 +118,7 @@ const EXPORT_RATIOS = [
 ];
 
 // --- Helpers ---
-const GH_API = 'https://api.github.com';
+const GH_API = '/api/github';
 
 function toBase64(str: string) {
   const bytes = new TextEncoder().encode(str);
@@ -139,20 +139,19 @@ function fromBase64(base64: string) {
   return new TextDecoder().decode(bytes);
 }
 
-async function getRepos(token: string, username: string) {
-  const res = await fetch(
-    `${GH_API}/users/${username}/repos?per_page=100&sort=updated`,
-    { headers: { Authorization: `Bearer ${token}` } }
-  );
-  if (!res.ok) throw new Error(`GitHub error ${res.status}: check token + username`);
+async function getRepos(username: string, token?: string) {
+  const headers: any = {};
+  if (token) headers['X-GitHub-Token'] = token;
+  const res = await fetch(`${GH_API}/users/${username}/repos?per_page=100&sort=updated`, { headers });
+  if (!res.ok) throw new Error(`GitHub error ${res.status}: check username or token configuration`);
   return res.json();
 }
 
-async function getFileContent(token: string, owner: string, repo: string, path: string) {
+async function getFileContent(owner: string, repo: string, path: string, token?: string) {
   try {
-    const res = await fetch(`${GH_API}/repos/${owner}/${repo}/contents/${path}`, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
+    const headers: any = {};
+    if (token) headers['X-GitHub-Token'] = token;
+    const res = await fetch(`${GH_API}/repos/${owner}/${repo}/contents/${path}`, { headers });
     if (!res.ok) return null;
     const data = await res.json();
     if (data.content) {
@@ -164,8 +163,9 @@ async function getFileContent(token: string, owner: string, repo: string, path: 
   }
 }
 
-async function getRepoContext(token: string, owner: string, repo: string): Promise<RepoContext> {
-  const headers = { Authorization: `Bearer ${token}` };
+async function getRepoContext(owner: string, repo: string, token?: string): Promise<RepoContext> {
+  const headers: any = {};
+  if (token) headers['X-GitHub-Token'] = token;
   
   // 1. Fetch tree, metadata, and readme in parallel
   const [treeRes, metaRes, readmeRes] = await Promise.all([
@@ -194,7 +194,7 @@ async function getRepoContext(token: string, owner: string, repo: string): Promi
   
   let manifestData: any = null;
   if (manifestPath) {
-    const content = await getFileContent(token, owner, repo, manifestPath);
+    const content = await getFileContent(owner, repo, manifestPath, token);
     if (content && manifestPath.endsWith('.json')) {
       try { manifestData = JSON.parse(content); } catch (_) {}
     }
@@ -227,7 +227,7 @@ async function getRepoContext(token: string, owner: string, repo: string): Promi
     const chunk = filesToFetch.slice(i, i + CHUNK_SIZE);
     const results = await Promise.all(
       chunk.map(async (path: string) => {
-        const content = await getFileContent(token, owner, repo, path);
+        const content = await getFileContent(owner, repo, path, token);
         return content ? { path, content: content.slice(0, 4000) } : null; // Budget: 4k chars per file
       })
     );
@@ -273,18 +273,31 @@ const JS5Canvas = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const recordingCanvasRef = useRef<HTMLCanvasElement>(null);
   const [error, setError] = useState<string | null>(null);
+  
+  const isThree = /THREE\.(WebGLRenderer|Scene|PerspectiveCamera|ShaderMaterial|RawShaderMaterial|Mesh|Group|Object3D|BufferGeometry|PlaneGeometry|BoxGeometry|SphereGeometry|Vector3|Color|Matrix4)/.test(code);
+  const contextType = isThree ? 'webgl2' : '2d';
+
   const mouseRef = useRef({ x: 0, y: 0, isPressed: false });
 
+  const renderKey = `${code.length}-${isRecording}-${exportRatio}-${contextType}`;
+
   useEffect(() => {
-    if (!code || !canvasRef.current) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
 
     let animationFrameId: number;
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-    const recCanvas = recordingCanvasRef.current;
-    const recCtx = recCanvas?.getContext('2d');
     
-    if (!ctx) return;
+    // Get context based on detected type. 
+    // For WebGL, we let Three.js handle context creation to avoid attribute conflicts.
+    const ctx = contextType === '2d' ? canvas.getContext('2d') : null;
+    
+    const recCanvas = recordingCanvasRef.current;
+    const recCtx = (recCanvas && contextType === '2d') ? recCanvas.getContext('2d') : null;
+    
+    if (contextType === '2d' && !ctx) {
+      setError("Could not get 2D context.");
+      return;
+    }
 
     const baseFontSize = 12;
     const baseCharWidth = baseFontSize * 0.6;
@@ -303,15 +316,28 @@ const JS5Canvas = ({
       recCanvas.height = recHeight;
     }
 
+    const defaultCode = `
+      ctx.fillStyle = '#050505';
+      ctx.fillRect(0, 0, grid.width, grid.height);
+      ctx.fillStyle = 'rgba(123, 47, 255, 0.3)';
+      ctx.font = '10px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('REPOSCRIPTER SYSTEM IDLE', grid.width/2, grid.height/2 - 10);
+      ctx.fillStyle = 'rgba(102, 102, 102, 0.3)';
+      ctx.fillText('SELECT REPOS AND INVOKE THE WEIRD TO BEGIN', grid.width/2, grid.height/2 + 10);
+      
+      // Subtle scanning line
+      const scanY = (time * 100) % grid.height;
+      ctx.fillStyle = 'rgba(123, 47, 255, 0.05)';
+      ctx.fillRect(0, scanY, grid.width, 1);
+    `;
+
     let renderFn: any = null;
     try {
-      // Robust code wrapping: 
-      // 1. If it already has a return, use it as is.
-      // 2. If it's a multi-line block or starts with a declaration, don't prepend return (assume it draws to ctx or has no return).
-      // 3. Otherwise, try prepending return for simple expressions.
-      const hasReturn = /\breturn\b/.test(code);
-      const isBlock = code.includes(';') || code.includes('\n') || /^\s*(const|let|var|function|if|for|while|switch|try|throw)/.test(code);
-      const finalCode = hasReturn ? code : (isBlock ? code : `return ${code}`);
+      const activeCode = code || defaultCode;
+      const hasReturn = /\breturn\b/.test(activeCode);
+      const isBlock = activeCode.includes(';') || activeCode.includes('\n') || /^\s*(const|let|var|function|if|for|while|switch|try|throw)/.test(activeCode);
+      const finalCode = hasReturn ? activeCode : (isBlock ? activeCode : `return ${activeCode}`);
 
       renderFn = new Function('grid', 'time', 'repos', 'input', 'mouse', 'ctx', 'canvas', 'THREE', `
         try {
@@ -330,9 +356,24 @@ const JS5Canvas = ({
       const cols = Math.floor(canvas.width / baseCharWidth);
       const rows = Math.floor(canvas.height / baseCharHeight);
 
-      ctx.fillStyle = '#050505';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.textBaseline = 'top';
+      if (ctx) {
+        ctx.fillStyle = '#050505';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        // Subtle "alive" grid
+        ctx.strokeStyle = 'rgba(123, 47, 255, 0.05)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        for(let x = 0; x < canvas.width; x += 50) {
+          ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height);
+        }
+        for(let y = 0; y < canvas.height; y += 50) {
+          ctx.moveTo(0, y); ctx.lineTo(canvas.width, y);
+        }
+        ctx.stroke();
+
+        ctx.textBaseline = 'top';
+      }
 
       const mouse = {
         x: mouseRef.current.x,
@@ -350,7 +391,7 @@ const JS5Canvas = ({
 
         try {
           const output = renderFn(
-            { cols: rCols, rows: rRows, width: recWidth, height: recHeight }, 
+            { cols: rCols, rows: rRows, width: recWidth, height: recHeight, canvas: recCanvas }, 
             time / 1000, 
             repoContexts, 
             userInput, 
@@ -360,12 +401,14 @@ const JS5Canvas = ({
             THREE
           );
           if (output) renderASCII(recCtx, output, recBaseCharWidth, recBaseCharHeight, recBaseFontSize);
-        } catch (e) {}
+        } catch (e: any) {
+          console.error("Recording Render Error:", e);
+        }
       }
 
       try {
         const output = renderFn(
-          { cols, rows, width: canvas.width, height: canvas.height }, 
+          { cols, rows, width: canvas.width, height: canvas.height, canvas }, 
           time / 1000, 
           repoContexts, 
           userInput, 
@@ -375,7 +418,15 @@ const JS5Canvas = ({
           THREE
         );
         if (output) renderASCII(ctx, output, baseCharWidth, baseCharHeight, baseFontSize);
-      } catch (e: any) {}
+        if (error) setError(null);
+      } catch (e: any) {
+        console.error("Render Error:", e);
+        if (e.message?.includes('precision')) {
+          setError("WebGL Context Error: The browser could not create a WebGL context. Try refreshing or closing other tabs.");
+        } else {
+          setError(`Runtime Error: ${e.message}`);
+        }
+      }
 
       animationFrameId = requestAnimationFrame(render);
     };
@@ -449,16 +500,54 @@ const JS5Canvas = ({
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mousedown', handleMouseDown);
       window.removeEventListener('mouseup', handleMouseUp);
+      
+      if ((canvas as any).__three) {
+        const three = (canvas as any).__three;
+        if (three.renderer) {
+          try {
+            three.renderer.dispose();
+            if (three.renderer.forceContextLoss) three.renderer.forceContextLoss();
+          } catch (e) {}
+        }
+        delete (canvas as any).__three;
+      }
+
+      const recCanvas = recordingCanvasRef.current;
+      if (recCanvas && (recCanvas as any).__three) {
+        const three = (recCanvas as any).__three;
+        if (three.renderer) {
+          try {
+            three.renderer.dispose();
+            if (three.renderer.forceContextLoss) three.renderer.forceContextLoss();
+          } catch (e) {}
+        }
+        delete (recCanvas as any).__three;
+      }
     };
-  }, [code, repoContexts, userInput, isRecording, exportRatio]);
+  }, [code, repoContexts, userInput, isRecording, exportRatio, contextType]);
 
   return (
     <div className="fixed inset-0 z-0 pointer-events-auto overflow-hidden bg-bg">
-      <canvas ref={canvasRef} className="w-full h-full opacity-60" />
-      <canvas ref={recordingCanvasRef} className="hidden" />
+      <canvas 
+        key={`main-${renderKey}`}
+        ref={canvasRef} 
+        className="w-full h-full opacity-100 transition-opacity duration-1000" 
+      />
+      <canvas key={`rec-${renderKey}`} ref={recordingCanvasRef} className="hidden" />
       {error && (
-        <div className="absolute bottom-4 left-20 bg-accent3/20 border border-accent3 text-accent3 p-2 text-[0.6rem] font-mono z-50 pointer-events-auto">
-          JS5 COMPILE ERROR: {error}
+        <div className="absolute bottom-4 left-20 bg-accent3/20 border border-accent3 text-accent3 p-4 text-[0.7rem] font-mono z-50 pointer-events-auto max-w-xl backdrop-blur-md flex justify-between items-start gap-4">
+          <div>
+            <div className="font-bold mb-1 flex items-center gap-2">
+              <X className="w-3 h-3" /> JS5 RUNTIME ERROR
+            </div>
+            {error}
+          </div>
+          <button 
+            onClick={() => setError(null)}
+            className="text-accent3 hover:text-white transition-colors"
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
       )}
     </div>
@@ -535,10 +624,13 @@ const SidebarIcon = ({ icon: Icon, active, onClick, label }: any) => (
 const GitHubPanel = ({ state, setState, handleLoadRepos, handleAddRepo, handleRemoveRepo }: any) => (
   <div className="flex flex-col gap-6">
     <div className="flex flex-col gap-2">
-      <label className="text-[0.6rem] uppercase tracking-widest text-muted">GitHub Credentials</label>
+      <label className="text-[0.6rem] uppercase tracking-widest text-muted flex justify-between">
+        <span>GitHub Credentials</span>
+        <span className="text-accent2/60 lowercase italic">Token optional if server-configured</span>
+      </label>
       <input 
         type="password" 
-        placeholder="Personal Access Token" 
+        placeholder="Personal Access Token (Optional)" 
         className="bg-bg border-border focus:border-accent text-[0.7rem] p-2"
         value={state.ghToken}
         onChange={e => setState((s: any) => ({ ...s, ghToken: e.target.value }))}
@@ -972,7 +1064,7 @@ function AppContent() {
     }
     setState(s => ({ ...s, isLoadingRepos: true, status: 'loading repos...' }));
     try {
-      const repos = await getRepos(state.ghToken, state.ghUser);
+      const repos = await getRepos(state.ghUser, state.ghToken);
       setState(s => ({ ...s, repos, isLoadingRepos: false, status: `${repos.length} repos loaded` }));
     } catch (e: any) {
       setState(s => ({ ...s, isLoadingRepos: false, status: `Error: ${e.message}` }));
@@ -1146,7 +1238,7 @@ function AppContent() {
 
       setState(s => ({ ...s, status: `reading ${state.selectedRepos.length} repo(s)...` }));
       const contexts = await Promise.all(
-        state.selectedRepos.map(r => getRepoContext(state.ghToken, r.owner, r.name))
+        state.selectedRepos.map(r => getRepoContext(r.owner, r.name, state.ghToken))
       );
       setRepoContexts(contexts);
       
@@ -1163,14 +1255,28 @@ function AppContent() {
         3. FIND THE STRANGE MECHANISM (erosion, fungal growth, bureaucratic failure, crystallization, machine hesitation, parasite-host logic, false memory, textile weave tension, flock panic, celestial mechanics, broken signage, thermal bloom, paper misregistration, dead pixels behaving like pollen).
         4. MAKE THE MECHANISM VISUAL in composition, movement, color, layering, timing, distortion, and interaction.
         
-        [ENHANCED TOOLBOX: THE NATURE OF CODE & REPO GENOME]
-        You are armed with the mathematical frameworks of Daniel Shiffman's "The Nature of Code" AND the specific "Style Genome" of the ingested repositories.
+        [ENHANCED TOOLBOX: THE NATURE OF CODE, THE BOOK OF SHADERS & REPO GENOME]
+        You are armed with the mathematical frameworks of Daniel Shiffman's "The Nature of Code", the algorithmic drawing techniques of "The Book of Shaders", AND the specific "Style Genome" of the ingested repositories.
         - Use VECTORS & FORCES (Gravity, Drag, Friction) to give your "weird" systems physical weight.
         - Use OSCILLATION (sin/cos/pendulums) to create rhythmic, hypnotic, or glitchy periodic behaviors.
-        - Use PARTICLE SYSTEMS & STEERING to drive emergent, autonomous behavior in your visual noise rituals.
-        - Use CELLULAR AUTOMATA & FRACTALS to grow complex, self-similar structures that feel "infected" or "overclocked."
-        - Use L-SYSTEMS (Axioms, Rules, Turtle Graphics) to generate recursive, biological, or architectural growth.
+        - Use PARTICLE SYSTEMS & STEERING (Boids: Separation, Alignment, Cohesion; Seek, Flee, Arrival, Obstacle Avoidance, Repellers; Steer = Desired - Velocity) to drive emergent, autonomous behavior. Use Bin-Lattice Spatial Subdivision for O(N) optimization.
+        - Use CELLULAR AUTOMATA (Game of Life, Vichniac Vote, Brian's Brain, MNCA, Lenia) to grow complex, self-similar structures that feel "infected" or "overclocked."
+        - Use L-SYSTEMS (Axioms, Rules, Turtle Graphics, Stochastic Rules) to generate recursive, biological, or architectural growth.
+        - Use EVOLUTIONARY COMPUTING (Genetic Algorithms: Genotype, Phenotype, Fitness, Mutation, Interactive Selection) to breed optimized visual systems.
+        - Use ARTIFICIAL NEURAL NETWORKS (Perceptrons, Neuroevolution/NEAT, Inference Maps) to grant your agents adaptive brains.
         - Use 4D SPATIAL MECHANICS (W-axis projection, 4D rotations) and THREE.JS to render hyper-dimensional geometry and complex 3D scenes.
+        - Use RAY MARCHING & SDFs to render non-Euclidean geometries (Mirror Rooms, Tori), curved spaces, and fractals via GLSL/Three.js.
+        - Use SHAPING FUNCTIONS (Step, Smoothstep, Pow, Exp, Log) and DISTANCE FIELDS (SDF) to sculpt procedural shapes and smooth transitions.
+        - Use POLAR & SPHERICAL COORDINATES for rotational mapping, spiral growth, and radial symmetry.
+        - Use REACTION-DIFFUSION (Gray-Scott) to simulate organic, morphing patterns like brain coral or zebra stripes.
+        - Use VERLET INTEGRATION (Previous Position, Relaxation Loops) for stable ropes, cloth, and soft-body morphing.
+        - Use FLUID DYNAMICS (Navier-Stokes, Advection, Jacobi Iteration) for smoke, water, and ink-like flow.
+        - Use DIFFERENTIAL GROWTH (Nodes/Springs, Curvature-Based Injection) for brain-like folds, kale ruffles, and coral reefs.
+        - Use STRANGE ATTRACTORS (Lorenz, Clifford, Chaos Theory) for portraits of chaos and density-mapped HDR color ramps.
+        - Use DOMAIN WARPING (Nested Noise, FBM, Gyroid/Worley Noise) to sculpt liquid-marble or obsidian textures.
+        - Use TILING & PATTERNS (Fract, Truchet Tiles, Offset Bricks) to create infinite, repetitive, or alternating structures.
+        - Use BLENDING MODES (Multiply, Screen, Overlay, Color Dodge) and COLOR SPACES (HSB, YUV) for advanced image processing and color theory.
+        - Use ADVANCED PHYSICS (Box2D, toxiclibs) for realistic collisions, pendulums, and joint connections.
         - [REPO GENOME]: Analyze the provided 'fileContents'. Look for specific code patterns, shader uniforms, exported functions, or logic structures. Map these internal "DNA" markers to visual motifs.
         
         Do not let the math make the art "clean" or "safe." The math is the engine; the feral design-brain is the driver.
@@ -1181,7 +1287,7 @@ function AppContent() {
         INTERFACE:
         The function receives:
         - ctx: CanvasRenderingContext2D (YOUR PRIMARY TOOL. Draw directly to this.)
-        - grid: { width: number, height: height } (the dimensions of the canvas)
+        - grid: { width: number, height: number, canvas: HTMLCanvasElement } (the dimensions and reference of the canvas)
         - time: number (seconds since start)
         - repos: RepoContext[] (metadata for the mixed repositories)
         - input: string (the user's art direction)
@@ -1190,23 +1296,84 @@ function AppContent() {
         - THREE: The Three.js library object (for 3D/4D rendering)
         
         THREE.JS USAGE:
-        - If using Three.js, you MUST check if the renderer/scene already exists on the 'canvas' or 'window' to avoid re-initializing every frame.
+        - If using Three.js, you MUST check if the renderer/scene already exists on the 'canvas' to avoid re-initializing every frame.
+        - IMPORTANT: When using Three.js, 'ctx' will be null. You must use the 'THREE.WebGLRenderer' on the 'canvas'.
+        - ERROR HANDLING: Always wrap 'new THREE.WebGLRenderer' in a try/catch. If it fails, it's likely due to context loss or limits. Note that if 'canvas.getContext' has already been called with a different type on this element, it will return null.
         - Example: 
           if (!canvas.__three) {
-            const renderer = new THREE.WebGLRenderer({ canvas, alpha: true });
-            const scene = new THREE.Scene();
-            const camera = new THREE.PerspectiveCamera(75, grid.width/grid.height, 0.1, 1000);
-            canvas.__three = { renderer, scene, camera };
-            // ... add objects
+            try {
+              // Check if context is available before initializing Three.js. 
+              // IMPORTANT: Three.js r163+ REQUIRES WebGL 2.
+              const gl = canvas.getContext('webgl2', { alpha: true, antialias: true });
+              if (!gl) throw new Error("WebGL 2 not supported or context occupied");
+              
+              const renderer = new THREE.WebGLRenderer({ canvas, context: gl, alpha: true, antialias: true });
+              const scene = new THREE.Scene();
+              const camera = new THREE.PerspectiveCamera(75, grid.width/grid.height, 0.1, 1000);
+              camera.position.z = 5;
+              const material = new THREE.ShaderMaterial({
+                glslVersion: THREE.GLSL3,
+                uniforms: { u_time: { value: 0 } },
+                vertexShader: '...', fragmentShader: '...'
+              });
+              const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
+              scene.add(mesh);
+              canvas.__three = { renderer, scene, camera, material };
+            } catch (e) {
+              console.error("WebGL Initialization Failed:", e);
+              return; // Exit early if WebGL fails
+            }
           }
-          const { renderer, scene, camera } = canvas.__three;
+          const { renderer, scene, camera, material } = canvas.__three;
+          // CRITICAL: Always guard uniform access.
+          if (material && material.uniforms && material.uniforms.u_time) {
+            material.uniforms.u_time.value = time;
+          }
+          renderer.setSize(grid.width, grid.height, false);
           renderer.render(scene, camera);
         
         OUTPUT LOGIC:
-        - PRIMARY: Draw directly to 'ctx' using standard Canvas API (fillRect, strokeStyle, beginPath, arc, fillText, etc.).
-        - LEGACY/OPTIONAL: You can return a 2D array of characters (string[][]) or objects ({char, color}[][]) if the user explicitly asks for ASCII or grid-based art.
+        - PRIMARY: Draw directly to 'ctx' using standard Canvas API. 'ctx' is available ONLY if NOT using Three.js.
+        - VISIBILITY: Ensure your art is visible against the #050505 background. Use bright colors or high contrast.
+        - NO EMPTY RETURNS: If you don't return a character grid, you MUST draw to 'ctx' or use 'renderer.render()'.
         
         GUIDELINES:
+        - DEFENSIVE PROGRAMMING: Always check if 'repos' has elements before accessing 'repos[0]'. Check if 'fileContents' has elements before accessing 'fileContents[0]'. 
+          Example: const firstRepo = repos.length > 0 ? repos[0] : null;
+        - SAFE PROPERTY ACCESS: When using Three.js ShaderMaterials, ensure uniforms are fully defined before accessing or updating their '.value' properties. NEVER access 'material.uniforms' without checking if 'material' exists first. Use optional chaining (material?.uniforms?.u_time?.value = time) or explicit if-guards.
+        - GLSL VERSIONING: 
+          1. NEVER manually add '#version 300 es' to your shaders. Three.js prepends its own defines, which will cause a compilation error if your version directive is not on the absolute first line.
+          2. To use GLSL 3.0 features (like 'in', 'out', 'texture()'), set 'glslVersion: THREE.GLSL3' in your 'ShaderMaterial' options.
+          3. PREFER 'ShaderMaterial' over 'RawShaderMaterial'. 'RawShaderMaterial' does not handle versioning or built-in attributes/uniforms, which often leads to compilation failures in this environment.
+          4. BUILT-IN ATTRIBUTES: In 'ShaderMaterial', Three.js automatically declares 'position', 'uv', 'normal', and standard matrices (modelViewMatrix, projectionMatrix, etc.). DO NOT redeclare them in your shader code as it will cause a "redefinition" error.
+          5. Example: 
+             const material = new THREE.ShaderMaterial({
+               glslVersion: THREE.GLSL3,
+               uniforms: { ... },
+               vertexShader: \`
+                 out vec2 vUv;
+                 void main() {
+                   vUv = uv;
+                   gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                 }
+               \`,
+               fragmentShader: \`
+                 in vec2 vUv;
+                 out vec4 fragColor;
+                 void main() {
+                   fragColor = vec4(vUv, 0.5, 1.0);
+                 }
+               \`
+             });
+        - GLSL STRICT TYPING: In WebGL/GLSL shaders, you MUST use 'int' for loop counters and array indices (e.g., 'for(int i = 0; i < MAX_STEPS; i++)'). Do not compare floats with ints. Ensure all float literals have a decimal point (e.g., '1.0' not '1').
+        - GLSL RESERVED WORDS: Avoid using reserved words as variable names in shaders. Common pitfalls include: 'partition', 'active', 'filter', 'sample', 'buffer', 'cast', 'extern', 'namespace', 'using'.
+        - POSITIVE RADIUS: When using ctx.arc(), you MUST ensure the radius is always positive. Use Math.max(0, radius) or Math.abs(radius) to prevent "negative radius" runtime errors.
+        - COMMON PITFALLS: 
+          1. Accessing 'material.uniforms.X.value' when 'material' or 'uniforms' is undefined. This often happens because 'canvas.__three' persists from PREVIOUS generations. Always assume 'canvas.__three' might be stale or empty.
+          2. Re-initializing Three.js objects every frame (use the 'if (!canvas.__three)' pattern).
+          3. Using 'ctx' when Three.js is active (it will be null).
+          4. Forgetting to call 'renderer.setSize' or 'renderer.render'.
+          5. Defining a uniform in the render loop that wasn't declared in the 'ShaderMaterial' constructor.
         - Use the repository names, languages, file structures, and ACTUAL CODE CONTENT to drive the visual logic (e.g., map file depth to line thickness, language to color palettes, or specific code patterns to visual motifs).
         - Create animations using the 'time' variable.
         - Use the user's art direction to set the mood, then push it into the strange.
