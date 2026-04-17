@@ -5,7 +5,6 @@
 
 /// <reference types="vite/client" />
 import React, { Component, useState, useEffect, useRef, useCallback } from 'react';
-import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import { 
   Github, 
   Sparkles, 
@@ -1153,13 +1152,18 @@ function AppContent() {
     setState(s => ({ ...s, isExportingToGH: true, status: 'Exporting to GitHub...' }));
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: `Generate a short, relevant, simple filename (including .js or .txt extension) for this JS5 art code based on this prompt: "${state.artPrompt}". Return ONLY the filename.`,
+      const filenameRes = await fetch('/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'meta-llama/llama-3.3-70b-instruct',
+          userMessage: `Generate a short, relevant, simple filename (including .js or .txt extension) for this JS5 art code based on this prompt: "${state.artPrompt}". Return ONLY the filename.`,
+        }),
       });
+      const filenameData = await filenameRes.json();
+      if (!filenameRes.ok) throw new Error(filenameData.error || 'Failed to generate filename');
 
-      const filename = response.text?.trim().replace(/['"]/g, '') || `art_${Date.now()}.js`;
+      const filename = filenameData.text?.trim().replace(/['"]/g, '') || `art_${Date.now()}.js`;
       const owner = state.ghUser;
       const repo = 'repo_script_js5_code';
       const path = filename;
@@ -1233,9 +1237,6 @@ function AppContent() {
     };
 
     try {
-      const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
-      const ai = new GoogleGenAI({ apiKey });
-
       setState(s => ({ ...s, status: `reading ${state.selectedRepos.length} repo(s)...` }));
       const contexts = await Promise.all(
         state.selectedRepos.map(r => getRepoContext(r.owner, r.name, state.ghToken))
@@ -1408,14 +1409,22 @@ function AppContent() {
         Generate the JS5 code now.
       `.trim();
 
-      const response = await callWithRetry(() => ai.models.generateContent({
-        model: 'gemini-3.1-pro-preview',
-        contents: userMsg,
-        config: {
-          systemInstruction: systemPrompt,
-          temperature: 0.8,
+      const response = await callWithRetry(async () => {
+        const res = await fetch('/api/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            systemPrompt,
+            userMessage: userMsg,
+            temperature: 0.8,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || 'Generation failed');
         }
-      }));
+        return data;
+      });
 
       const js5Code = response.text?.replace(/```javascript|```js|```/g, '').trim() || '';
       setState(s => ({ ...s, js5Code, isGenerating: false, status: '✓ JS5 Alchemized' }));
