@@ -2,6 +2,7 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
+import OpenAI from "openai";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -42,6 +43,56 @@ async function startServer() {
     } catch (error) {
       console.error("GitHub Proxy Error:", error);
       res.status(500).json({ error: "Failed to proxy request to GitHub" });
+    }
+  });
+
+  // Proxy LLM generation (OpenRouter / any OpenAI-compatible API)
+  app.post("/api/generate", async (req, res) => {
+    const apiKey = process.env.OPENROUTER_API_KEY;
+    if (!apiKey) {
+      return res.status(500).json({ error: "OPENROUTER_API_KEY not configured on server" });
+    }
+
+    const { model, systemPrompt, userMessage, temperature } = req.body as {
+      model?: string;
+      systemPrompt?: string;
+      userMessage: string;
+      temperature?: number;
+    };
+
+    if (!userMessage) {
+      return res.status(400).json({ error: "userMessage is required" });
+    }
+
+    const resolvedModel = model || process.env.LLM_MODEL || "qwen/qwen-2.5-coder-32b-instruct";
+
+    const client = new OpenAI({
+      apiKey,
+      baseURL: "https://openrouter.ai/api/v1",
+      defaultHeaders: {
+        "HTTP-Referer": process.env.APP_URL || "https://reposcripter.app",
+        "X-Title": "RepoScripter",
+      },
+    });
+
+    try {
+      const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [];
+      if (systemPrompt) {
+        messages.push({ role: "system", content: systemPrompt });
+      }
+      messages.push({ role: "user", content: userMessage });
+
+      const completion = await client.chat.completions.create({
+        model: resolvedModel,
+        messages,
+        temperature: temperature ?? 0.8,
+      });
+
+      const text = completion.choices[0]?.message?.content ?? "";
+      res.json({ text });
+    } catch (error: any) {
+      console.error("LLM Proxy Error:", error);
+      res.status(500).json({ error: error.message || "Failed to generate content" });
     }
   });
 
